@@ -1,0 +1,151 @@
+---
+title: "Predicting exercise manner with random forest method"
+author: "Adam Sawicki"
+date: "Sunday, July 27, 2014"
+output: html_document
+---
+I assume the data are downloaded into workspace folder:
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+Load data into R.
+```{r, eval=FALSE}
+raw_pml <- read.table("pml-training.csv", header = T, sep = ",", na.strings = c("#DIV/0!", "", "NA"), dec = ".", stringsAsFactors = T)
+```
+
+#Selecting features
+Many features have mostly NA values. I certainly don't want those in the model.
+As to other features I've decided to use only those which hold data from move-measurement devices. This way i can get a classifier independent of user and time.
+
+I have manually selected those features from spreadsheet.
+```{r}
+predictors=c("roll_belt","pitch_belt","yaw_belt","total_accel_belt","gyros_belt_x","gyros_belt_y","gyros_belt_z","accel_belt_x","accel_belt_y","accel_belt_z","magnet_belt_x","magnet_belt_y","magnet_belt_z","roll_arm","pitch_arm","yaw_arm","total_accel_arm","gyros_arm_x","gyros_arm_y","gyros_arm_z","accel_arm_x","accel_arm_y","accel_arm_z","magnet_arm_x","magnet_arm_y","magnet_arm_z","roll_dumbbell","pitch_dumbbell","yaw_dumbbell","total_accel_dumbbell","gyros_dumbbell_x","gyros_dumbbell_y","gyros_dumbbell_z","accel_dumbbell_x","accel_dumbbell_y","accel_dumbbell_z","magnet_dumbbell_x","magnet_dumbbell_y","magnet_dumbbell_z","roll_forearm","pitch_forearm","yaw_forearm","total_accel_forearm","gyros_forearm_x","gyros_forearm_y","gyros_forearm_z","accel_forearm_x","accel_forearm_y","accel_forearm_z","magnet_forearm_x","magnet_forearm_y","magnet_forearm_z")
+```
+#Creating datasets
+Create data frame which holds all the data I want.
+```{r, eval=FALSE}
+pml=raw_pml[,c("classe", predictors)]
+```
+Divide the data into a training and testing set.
+```{r}
+require(caret)
+inTrain=createDataPartition(pml$classe,p = 0.5, list = F)
+training=pml[inTrain,]
+testing=pml[-inTrain,]
+```
+#Creating first model
+I've decided to use random forest method, only because it's quite fast, accurate and easy to implement.
+
+For the first model I'm going to use default parameters.
+```{r}
+require(randomForest)
+```
+```{r, eval=FALSE}
+fit_rf=randomForest(classe ~ ., data=training)
+```
+```{r, echo=FALSE}
+load("fit_rf.Rda")
+```
+```{r}
+print(fit_rf)
+```
+The results are impressive. Extremely low error of 1%.
+
+Now let's see the plot for this model.
+```{r}
+plot(fit_rf)
+```
+This plot shows how the main OOB error and class errors changed with growth of forest.
+It looks like errors hit a plateau at around 50 trees in forest.
+That means I could use only 50 trees in the model and still get very low error.
+
+Now let's have a look at variable importance.
+```{r}
+varImpPlot(fit_rf)
+```
+
+Few features are of much greater importance than others.
+I'll extract those features and build a second model with those most important features only.
+```{r}
+important_predictors=rownames(fit_rf$importance[fit_rf$importance>220,0])
+```
+#Second model
+For this model i will set number of trees to 50, and use only most important features as predictors.
+```{r, eval=FALSE}
+fit_rfi=randomForest(classe ~ .,
+                    data=training[,c("classe", important_predictors)],
+                    ntree = 50)
+```
+```{r, echo=FALSE}
+load("fit_rfi.Rda")
+```
+Computing of this model was much faster.
+Let's see the results.
+```{r}
+print(fit_rfi)
+plot(fit_rfi)
+```
+
+The error is higher, but still small enough for this project.
+It's not fault of ntree=50, because errors hit plateau at around 30 trees on the plot.
+Higher error is a result of lower number of predictor features.
+Well, let's call it a deal. Higher error for lower computing cost.
+
+#Final model with cross validation
+
+In random forests, there is no need for cross-validation to get an estimate of the test set error. Out Of Bag (OOB) error is estimated internally , during the run.
+
+However cross validation is required in the project. So I'll do it with caret package.
+I'll use K-fold method with k=10.
+```{r, eval=FALSE}
+fitControl <- trainControl(method = "cv", number = 10)
+```
+The rest of parameters will be the same as in previous model.
+```{r, eval=FALSE }
+rfGrid <-  expand.grid(mtry = 2)
+train_rf=train(classe~., data=training[,c("classe", important_predictors)],
+               method = "rf",
+               trControl = fitControl,
+               tuneGrid = rfGrid,
+               ntree = 50)
+```
+```{r, echo=FALSE}
+load("train_rf.Rda")
+```
+Now let's have a look at results of cross validation.
+```{r}
+train_rf$resample
+sd(train_rf$resample[,1])
+mean(train_rf$resample[,1])
+1-mean(train_rf$resample[,1])
+```
+OOB = 1 - Accuracy. So the expected out of sample error for this model is 0.02445851 .
+As I expected this estimate is very close to the OOB value from previos model.
+
+#Testing the final model
+
+Create predictions for testing set with final model.
+```{r}
+predictions_test=predict(object = train_rf, newdata = testing)
+```
+Check for correctness of those predictions.
+```{r}
+correct_test= predictions_test==testing$classe
+```
+Compute accuracy.
+```{r}
+accuracy_test=mean(correct_test)
+print(accuracy_test)
+```
+Print confusion matrix for testing set.
+```{r}
+table(predictions_test,testing$classe)
+```
+Not surprisingly the accuracy estimate from final model is almost equal to accuracy on test set.
+```{r}
+mean(train_rf$resample[,1]) - accuracy_test
+```
+
+The end.
+
